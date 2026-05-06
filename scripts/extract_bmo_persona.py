@@ -12,7 +12,7 @@ from bs4 import BeautifulSoup
 
 
 REPO_DIR = Path(__file__).resolve().parents[1]
-DEFAULT_SOURCE_DIR = REPO_DIR / "data" / "raw"
+DEFAULT_SOURCE_DIR = REPO_DIR / "data" / "raw" / "adventure-time-transcripts"
 OUTPUT_DIR = REPO_DIR / "data"
 OUTPUT_EXAMPLES = OUTPUT_DIR / "bmo_examples.jsonl"
 OUTPUT_TRAIN = OUTPUT_DIR / "bmo_train.jsonl"
@@ -28,10 +28,10 @@ PERSONA_SYSTEM = (
 )
 
 SPEAKER_RE = re.compile(
-    r"^([A-Z][A-Za-z0-9 '().\-\/]+?)(?:\s*\[(?P<bracket>[^\]]+)\])?:\s*(?P<text>.+)$"
+    r"^([A-Z][A-Za-z0-9 '().\-\/]+?)(?:\s*\[(?P<bracket>[^\]]+)\])?\s*:\s*(?P<text>.+)$"
 )
 MARKDOWN_SPEAKER_RE = re.compile(
-    r"^(?:[:\-]\s*)?\*\*(?P<speaker>[^*\[]+?)(?:\s*\[(?P<bracket>[^\]]+)\])?\*\*:\s*(?P<text>.+)$"
+    r"^(?:[:\-]\s*)?\*\*(?P<speaker>[^*\[]+?)(?:\s*\[(?P<bracket>[^\]]+)\])?\*\*\s*:\s*(?P<text>.+)$"
 )
 LEADING_STAGE_RE = re.compile(r"^\[(?P<stage>[^\]]+)\]\s*(?P<text>.*)$")
 HTML_NOISE_RE = re.compile(r"\[(?:edit|citation needed|source|music|laughs?)\]", re.IGNORECASE)
@@ -50,6 +50,20 @@ def read_text(path: Path) -> str:
         for tag in soup(["script", "style", "noscript"]):
             tag.decompose()
         content = soup.select_one(".mw-parser-output") or soup.body or soup
+        transcript_head = content.find("span", id="Transcript")
+        if transcript_head and transcript_head.parent:
+            transcript_lines: list[str] = []
+            for sibling in transcript_head.parent.next_siblings:
+                if getattr(sibling, "name", None) == "h2":
+                    break
+                if getattr(sibling, "name", None) != "dl":
+                    continue
+                for dd in sibling.find_all("dd", recursive=False):
+                    text = re.sub(r"\s+", " ", dd.get_text(" ", strip=True)).strip()
+                    if text:
+                        transcript_lines.append(text)
+            if transcript_lines:
+                return "\n".join(transcript_lines)
         return content.get_text("\n")
     return path.read_text(encoding="utf-8", errors="replace")
 
@@ -211,7 +225,7 @@ def build_report(examples: list[dict], counterexamples: list[dict], summary: dic
             "## Notes",
             "",
             "- The extractor only keeps dialogue lines that match transcript speaker labels.",
-            "- Capture the Fandom transcript pages into `data/raw/` first, then rerun this script.",
+            "- Sync `data/raw/adventure-time-transcripts/` with `scripts/sync_adventure_time_transcripts.py`, then rerun this script.",
         ]
     )
 
@@ -236,7 +250,7 @@ def main() -> None:
     source_files = sorted(
         [
             path
-            for path in args.source_dir.rglob("*")
+    for path in args.source_dir.rglob("*")
             if path.is_file() and path.suffix.lower() in {".html", ".htm", ".txt", ".md"}
         ]
     )
@@ -246,7 +260,7 @@ def main() -> None:
     blocks: list[dict] = []
     for path in source_files:
         text = read_text(path)
-        blocks.extend(parse_blocks(text, path.name))
+        blocks.extend(parse_blocks(text, str(path.relative_to(args.source_dir))))
 
     examples, train_rows, eval_rows, counterexamples, summary = build_examples(
         blocks,
